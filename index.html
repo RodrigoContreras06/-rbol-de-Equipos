@@ -91,7 +91,7 @@
       box-shadow: none;
     }
 
-    .search-row { display: flex; gap: 6px; align-items: center; }
+    .search-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
     .search-box {
       flex: 1;
@@ -477,10 +477,12 @@
 
     <div class="search-row">
       <input type="text" id="searchInput" class="search-box" placeholder="Buscar por Tag, Equipo SAP, Ubicación o descripción..." />
+      <input type="text" id="searchUT" class="search-box" style="max-width: 260px;" placeholder="Equipos por Ubicación Técnica..." />
       <button class="toggle-filters-btn hud-btn-cut" onclick="toggleFiltrosMovil()">Filtros</button>
     </div>
 
     <div id="controlsBar" class="controls-bar">
+      <select id="filterEstacion"><option value="">Todas las Estaciones</option></select>
       <select id="filterTroncal"><option value="">Todas las Troncales</option></select>
       <select id="filterCriticidad"><option value="">Toda Criticidad</option></select>
       <button class="hud-btn-cut" onclick="expandirTodo(true)">Expandir</button>
@@ -598,18 +600,50 @@
     }
 
     function inicializarVista() {
-      poblarFiltros();
       treeData = construirArbol(rawUT, rawEQ);
+      treeData.forEach(root => detectarEstacionNodo(root, ""));
+      poblarFiltros(treeData);
       renderizarArbol();
     }
 
-    function poblarFiltros() {
+    function detectarEstacionNodo(nodo, ancestroEstacion = "") {
+      const texto = `${nodo.id} ${nodo.nombre}`.toLowerCase();
+      if (nodo.tipo === "UT" && (texto.includes("estación") || texto.includes("estacion") || texto.includes("planta"))) {
+        nodo._estacion = `${nodo.id} — ${nodo.nombre}`;
+      } else {
+        nodo._estacion = ancestroEstacion || (nodo.tipo === "UT" ? `${nodo.id} — ${nodo.nombre}` : "");
+      }
+
+      if (nodo.children && nodo.children.length > 0) {
+        nodo.children.forEach(hijo => detectarEstacionNodo(hijo, nodo._estacion));
+      }
+    }
+
+    function recolectarEstaciones(nodos, setEstaciones) {
+      nodos.forEach(n => {
+        if (n._estacion) setEstaciones.add(n._estacion);
+        if (n.children && n.children.length > 0) {
+          recolectarEstaciones(n.children, setEstaciones);
+        }
+      });
+    }
+
+    function poblarFiltros(arbolYaConstruido) {
       const troncales = new Set();
       const criticidades = new Set();
+      const estaciones = new Set();
 
       [...rawUT, ...rawEQ].forEach(item => {
         if (item["Troncal"]) troncales.add(item["Troncal"]);
         if (item["Criticidad"]) criticidades.add(item["Criticidad"]);
+      });
+
+      recolectarEstaciones(arbolYaConstruido, estaciones);
+
+      const selEstacion = document.getElementById("filterEstacion");
+      selEstacion.innerHTML = '<option value="">Todas las Estaciones</option>';
+      [...estaciones].sort().forEach(est => {
+        selEstacion.innerHTML += `<option value="${est}">${est}</option>`;
       });
 
       const selTroncal = document.getElementById("filterTroncal");
@@ -680,11 +714,13 @@
 
     function renderizarArbol() {
       const query = document.getElementById("searchInput").value.toLowerCase().trim();
+      const utQuery = document.getElementById("searchUT").value.toLowerCase().trim();
+      const estacion = document.getElementById("filterEstacion").value;
       const troncal = document.getElementById("filterTroncal").value;
       const crit = document.getElementById("filterCriticidad").value;
 
-      const hayFiltro = query.length > 0 || troncal !== "" || crit !== "";
-      const arbolFiltrado = hayFiltro ? filtrarNodos(treeData, query, troncal, crit) : treeData;
+      const hayFiltro = query.length > 0 || utQuery.length > 0 || estacion !== "" || troncal !== "" || crit !== "";
+      const arbolFiltrado = hayFiltro ? filtrarNodos(treeData, query, utQuery, estacion, troncal, crit) : treeData;
 
       const container = document.getElementById("tree-container");
       container.innerHTML = "";
@@ -701,18 +737,23 @@
       container.appendChild(fragment);
     }
 
-    function filtrarNodos(nodos, query, troncal, crit, ancestroCoincidio = false) {
+    function filtrarNodos(nodos, query, utQuery, estacion, troncal, crit, ancestroCoincidio = false) {
       return nodos.map(nodo => {
+        const utPropia = (nodo.tipo === "UT" ? nodo.id : (nodo.raw["Ubicación técnica"] || "")).toLowerCase();
+        const denomUT = (nodo.raw["Denominación de la ubicación técnica"] || "").toLowerCase();
+
         const matchQuery = !query || nodo._searchText.includes(query);
+        const matchUT = !utQuery || utPropia.includes(utQuery) || denomUT.includes(utQuery);
+        const matchEstacion = !estacion || nodo._estacion === estacion;
         const matchTroncal = !troncal || nodo.raw["Troncal"] === troncal;
         const matchCrit = !crit || nodo.raw["Criticidad"] === crit;
 
-        const esteNodoCoincide = matchQuery && matchTroncal && matchCrit;
-        const mostrarHijosCompletos = ancestroCoincidio || (Boolean(query) && esteNodoCoincide);
+        const esteNodoCoincide = matchQuery && matchUT && matchEstacion && matchTroncal && matchCrit;
+        const mostrarHijosCompletos = ancestroCoincidio || ((Boolean(query) || Boolean(utQuery)) && esteNodoCoincide);
 
         const hijosFiltrados = mostrarHijosCompletos
-          ? filtrarNodos(nodo.children, "", troncal, crit, true)
-          : filtrarNodos(nodo.children, query, troncal, crit, false);
+          ? filtrarNodos(nodo.children, "", "", estacion, troncal, crit, true)
+          : filtrarNodos(nodo.children, query, utQuery, estacion, troncal, crit, false);
 
         if (esteNodoCoincide || hijosFiltrados.length > 0) {
           return {
@@ -823,10 +864,14 @@
       clearTimeout(searchTimer);
       searchTimer = setTimeout(renderizarArbol, 200);
     });
+    document.getElementById("searchUT").addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(renderizarArbol, 200);
+    });
+    document.getElementById("filterEstacion").addEventListener("change", renderizarArbol);
     document.getElementById("filterTroncal").addEventListener("change", renderizarArbol);
     document.getElementById("filterCriticidad").addEventListener("change", renderizarArbol);
 
-    // Restaurar preferencia de Modo Campo y cargar datos
     aplicarModoCampo(localStorage.getItem(FIELD_MODE_KEY) === "1");
     cargarDatos();
   </script>
