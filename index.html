@@ -147,7 +147,7 @@
     <select id="filterCriticidad"><option value="">Toda Criticidad</option></select>
     <button onclick="expandirTodo(true)">Expandir</button>
     <button onclick="expandirTodo(false)">Contraer</button>
-    <button class="primary" onclick="cargarDatos()">↻ Actualizar</button>
+    <button class="primary" onclick="cargarDatos(true)">↻ Actualizar</button>
   </header>
 
   <main>
@@ -160,28 +160,52 @@
   </main>
 
   <script>
-    // 👇 PEGA AQUÍ LA URL DE TU WEB APP DE GOOGLE APPS SCRIPT
     const API_URL = "https://script.google.com/macros/s/AKfycbx_V7vCNrVFpOGeD3waVKZ7RIJkAer2Z-KLj2bxbmv5g8AgjxZeDqqqihu5NT4F_0th/exec";
+    const STORAGE_KEY = "sap_tree_cache_v1";
 
     let rawUT = [];
     let rawEQ = [];
     let treeData = [];
 
-    async function cargarDatos() {
+    async function cargarDatos(forzarRed = false) {
       const container = document.getElementById("tree-container");
-      container.innerHTML = '<div class="loader">Sincronizando datos con SAP/Sheets...</div>';
+
+      if (!forzarRed) {
+        const localData = localStorage.getItem(STORAGE_KEY);
+        if (localData) {
+          try {
+            const json = JSON.parse(localData);
+            rawUT = json.ubicaciones || [];
+            rawEQ = json.equipos || [];
+            inicializarVista();
+            return;
+          } catch (e) {}
+        }
+      }
+
+      container.innerHTML = '<div class="loader">Sincronizando datos desde Google Sheets...</div>';
 
       try {
-        const res = await fetch(API_URL);
+        const url = forzarRed ? `${API_URL}?refresh=1` : API_URL;
+        const res = await fetch(url);
         const json = await res.json();
         rawUT = json.ubicaciones || [];
         rawEQ = json.equipos || [];
 
-        poblarFiltros();
-        construirYRenderizar();
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(json));
+        } catch (e) {}
+
+        inicializarVista();
       } catch (err) {
         container.innerHTML = `<div class="loader" style="color:#f87171;">Error al conectar con Google Sheets. Revisa la URL del script.<br><small>${err}</small></div>`;
       }
+    }
+
+    function inicializarVista() {
+      poblarFiltros();
+      treeData = construirArbol(rawUT, rawEQ);
+      renderizarArbol();
     }
 
     function poblarFiltros() {
@@ -211,12 +235,14 @@
       ubicaciones.forEach(u => {
         const id = u["Ubicación técnica"];
         if (!id) return;
+        const textoBusqueda = `${id} ${u["Denominación de la ubicación técnica"] || ""} ${Object.values(u).join(" ")}`.toLowerCase();
         mapUT[id] = {
           tipo: "UT",
           id: id,
           nombre: u["Denominación de la ubicación técnica"] || "Sin denominación",
           padreUT: u["Ubicación técnica superior"] || "",
           raw: u,
+          _searchText: textoBusqueda,
           children: []
         };
       });
@@ -225,6 +251,7 @@
       equipos.forEach(e => {
         const id = e["Equipo"];
         if (!id) return;
+        const textoBusqueda = `${id} ${e["Denominación de objeto técnico"] || ""} ${Object.values(e).join(" ")}`.toLowerCase();
         mapEQ[id] = {
           tipo: e["Equipo superior"] ? "SUBEQ" : "EQ",
           id: id,
@@ -232,6 +259,7 @@
           padreUT: e["Ubicación técnica"] || "",
           padreEQ: e["Equipo superior"] || "",
           raw: e,
+          _searchText: textoBusqueda,
           children: []
         };
       });
@@ -252,20 +280,20 @@
         } else if (eq.padreUT && mapUT[eq.padreUT]) {
           mapUT[eq.padreUT].children.push(eq);
         } else {
-          roots.push(eq); // Huérfanos (si los hubiera) van a la raíz
+          roots.push(eq);
         }
       });
 
       return roots;
     }
 
-    function construirYRenderizar() {
+    function renderizarArbol() {
       const query = document.getElementById("searchInput").value.toLowerCase().trim();
       const troncal = document.getElementById("filterTroncal").value;
       const crit = document.getElementById("filterCriticidad").value;
 
-      const arbolCompleto = construirArbol(rawUT, rawEQ);
-      const arbolFiltrado = filtrarNodos(arbolCompleto, query, troncal, crit);
+      const hayFiltro = query.length > 0 || troncal !== "" || crit !== "";
+      const arbolFiltrado = hayFiltro ? filtrarNodos(treeData, query, troncal, crit) : treeData;
 
       const container = document.getElementById("tree-container");
       container.innerHTML = "";
@@ -274,56 +302,52 @@
         container.innerHTML = '<div class="empty-state">No se encontraron activos con esos criterios.</div>';
         return;
       }
-const hayFiltro = query.length > 0 || troncal !== "" || crit !== "";
-arbolFiltrado.forEach(root => {
-  container.appendChild(crearElementoNodo(root, true, hayFiltro));
-});
-      const autoExpandir = query.length > 0 || troncal !== "" || crit !== "";
+
+      const fragment = document.createDocumentFragment();
       arbolFiltrado.forEach(root => {
-        container.appendChild(crearElementoNodo(root, true, autoExpandir));
+        fragment.appendChild(crearElementoNodo(root, true, hayFiltro));
       });
+      container.appendChild(fragment);
     }
 
-function filtrarNodos(nodos, query, troncal, crit, ancestroCoincidio = false) {
-  return nodos.map(nodo => {
-    const valoresRaw = Object.values(nodo.raw || {}).join(" ");
-    const textoNodo = `${nodo.id} ${nodo.nombre} ${valoresRaw}`.toLowerCase();
+    function filtrarNodos(nodos, query, troncal, crit, ancestroCoincidio = false) {
+      return nodos.map(nodo => {
+        const matchQuery = !query || nodo._searchText.includes(query);
+        const matchTroncal = !troncal || nodo.raw["Troncal"] === troncal;
+        const matchCrit = !crit || nodo.raw["Criticidad"] === crit;
 
-    const matchQuery = !query || textoNodo.includes(query);
-    const matchTroncal = !troncal || nodo.raw["Troncal"] === troncal;
-    const matchCrit = !crit || nodo.raw["Criticidad"] === crit;
+        const esteNodoCoincide = matchQuery && matchTroncal && matchCrit;
+        const mostrarHijosCompletos = ancestroCoincidio || (Boolean(query) && esteNodoCoincide);
 
-    const esteNodoCoincide = matchQuery && matchTroncal && matchCrit;
-    // Si este nodo (por ejemplo, una Ubicación Técnica) coincide, mostramos sus hijos completos
-    const mostrarHijosCompletos = ancestroCoincidio || (Boolean(query) && esteNodoCoincide);
+        const hijosFiltrados = mostrarHijosCompletos
+          ? filtrarNodos(nodo.children, "", troncal, crit, true)
+          : filtrarNodos(nodo.children, query, troncal, crit, false);
 
-    const hijosFiltrados = mostrarHijosCompletos
-      ? filtrarNodos(nodo.children, "", troncal, crit, true)
-      : filtrarNodos(nodo.children, query, troncal, crit, false);
-
-    if (esteNodoCoincide || hijosFiltrados.length > 0) {
-      return {
-        ...nodo,
-        children: hijosFiltrados,
-        _expandirPorFiltro: Boolean(query || troncal || crit) && hijosFiltrados.length > 0
-      };
+        if (esteNodoCoincide || hijosFiltrados.length > 0) {
+          return {
+            ...nodo,
+            children: hijosFiltrados,
+            _expandirPorFiltro: !ancestroCoincidio && hijosFiltrados.length > 0
+          };
+        }
+        return null;
+      }).filter(Boolean);
     }
-    return null;
-  }).filter(Boolean);
-}
 
-    function crearElementoNodo(nodo, isRoot, autoExpandir) {
+    function crearElementoNodo(nodo, isRoot, hayFiltro) {
       const div = document.createElement("div");
       div.className = isRoot ? "node node-root" : "node";
 
       const tieneHijos = nodo.children && nodo.children.length > 0;
+      const abrirHijos = hayFiltro && (nodo._expandirPorFiltro !== false);
+
       const badgeClass = nodo.tipo === "UT" ? "badge-ut" : (nodo.tipo === "EQ" ? "badge-eq" : "badge-sub");
       const badgeText = nodo.tipo === "UT" ? "UT" : (nodo.tipo === "EQ" ? "EQ" : "SUB");
 
       const row = document.createElement("div");
       row.className = "node-row";
       row.innerHTML = `
-        <span class="toggle">${tieneHijos ? (autoExpandir ? "▼" : "▶") : "•"}</span>
+        <span class="toggle">${tieneHijos ? (abrirHijos ? "▼" : "▶") : "•"}</span>
         <span class="badge ${badgeClass}">${badgeText}</span>
         <span class="code">${nodo.id}</span>
         <span class="desc" title="${nodo.nombre}">${nodo.nombre}</span>
@@ -345,22 +369,24 @@ function filtrarNodos(nodos, query, troncal, crit, ancestroCoincidio = false) {
 
       div.appendChild(row);
 
-if (tieneHijos) {
-  const abrirHijos = autoExpandir && (nodo._expandirPorFiltro !== false);
-  const childrenContainer = document.createElement("div");
-  childrenContainer.className = abrirHijos ? "children open" : "children";
-  nodo.children.forEach(hijo => {
-    childrenContainer.appendChild(crearElementoNodo(hijo, false, autoExpandir));
-  });
-  div.appendChild(childrenContainer);
-}
+      if (tieneHijos) {
+        const childrenContainer = document.createElement("div");
+        childrenContainer.className = abrirHijos ? "children open" : "children";
+        nodo.children.forEach(hijo => {
+          childrenContainer.appendChild(crearElementoNodo(hijo, false, hayFiltro));
+        });
+        div.appendChild(childrenContainer);
+      }
+
+      return div;
+    }
 
     function mostrarDetalle(nodo) {
       const panel = document.getElementById("detail-container");
       const r = nodo.raw;
+      const badgeClass = nodo.tipo === "UT" ? "badge-ut" : (nodo.tipo === "EQ" ? "badge-eq" : "badge-sub");
       const tipoLabel = nodo.tipo === "UT" ? "Ubicación Técnica (IH06)" : (nodo.tipo === "EQ" ? "Equipo Principal (IH08)" : "Sub-equipo / Componente (IH08)");
 
-      // Construir tarjetas con los campos que tengan valor
       let specsHTML = "";
       Object.entries(r).forEach(([clave, valor]) => {
         if (valor && valor.trim() !== "") {
@@ -375,7 +401,7 @@ if (tieneHijos) {
 
       panel.innerHTML = `
         <div class="detail-header">
-          <span class="badge ${nodo.tipo === "UT" ? "badge-ut" : "badge-eq"}">${tipoLabel}</span>
+          <span class="badge ${badgeClass}">${tipoLabel}</span>
           <h2 class="detail-title">${nodo.nombre}</h2>
           <div class="detail-code">
             <span>${nodo.id}</span>
@@ -400,10 +426,14 @@ if (tieneHijos) {
       });
     }
 
-    // Eventos en tiempo real
-    document.getElementById("searchInput").addEventListener("input", construirYRenderizar);
-    document.getElementById("filterTroncal").addEventListener("change", construirYRenderizar);
-    document.getElementById("filterCriticidad").addEventListener("change", construirYRenderizar);
+    // Eventos en tiempo real con debounce
+    let searchTimer;
+    document.getElementById("searchInput").addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(renderizarArbol, 200);
+    });
+    document.getElementById("filterTroncal").addEventListener("change", renderizarArbol);
+    document.getElementById("filterCriticidad").addEventListener("change", renderizarArbol);
 
     // Iniciar
     cargarDatos();
