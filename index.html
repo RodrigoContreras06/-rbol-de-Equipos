@@ -274,28 +274,43 @@
         container.innerHTML = '<div class="empty-state">No se encontraron activos con esos criterios.</div>';
         return;
       }
-
+const hayFiltro = query.length > 0 || troncal !== "" || crit !== "";
+arbolFiltrado.forEach(root => {
+  container.appendChild(crearElementoNodo(root, true, hayFiltro));
+});
       const autoExpandir = query.length > 0 || troncal !== "" || crit !== "";
       arbolFiltrado.forEach(root => {
         container.appendChild(crearElementoNodo(root, true, autoExpandir));
       });
     }
 
-    function filtrarNodos(nodos, query, troncal, crit) {
-      return nodos.map(nodo => {
-        const hijosFiltrados = filtrarNodos(nodo.children, query, troncal, crit);
-        
-        const textoNodo = `${nodo.id} ${nodo.nombre} ${nodo.raw["Número identificación técnica"] || ""} ${nodo.raw["Número de inventario"] || ""}`.toLowerCase();
-        const matchQuery = !query || textoNodo.includes(query);
-        const matchTroncal = !troncal || nodo.raw["Troncal"] === troncal;
-        const matchCrit = !crit || nodo.raw["Criticidad"] === crit;
+function filtrarNodos(nodos, query, troncal, crit, ancestroCoincidio = false) {
+  return nodos.map(nodo => {
+    const valoresRaw = Object.values(nodo.raw || {}).join(" ");
+    const textoNodo = `${nodo.id} ${nodo.nombre} ${valoresRaw}`.toLowerCase();
 
-        if ((matchQuery && matchTroncal && matchCrit) || hijosFiltrados.length > 0) {
-          return { ...nodo, children: hijosFiltrados };
-        }
-        return null;
-      }).filter(Boolean);
+    const matchQuery = !query || textoNodo.includes(query);
+    const matchTroncal = !troncal || nodo.raw["Troncal"] === troncal;
+    const matchCrit = !crit || nodo.raw["Criticidad"] === crit;
+
+    const esteNodoCoincide = matchQuery && matchTroncal && matchCrit;
+    // Si este nodo (por ejemplo, una Ubicación Técnica) coincide, mostramos sus hijos completos
+    const mostrarHijosCompletos = ancestroCoincidio || (Boolean(query) && esteNodoCoincide);
+
+    const hijosFiltrados = mostrarHijosCompletos
+      ? filtrarNodos(nodo.children, "", troncal, crit, true)
+      : filtrarNodos(nodo.children, query, troncal, crit, false);
+
+    if (esteNodoCoincide || hijosFiltrados.length > 0) {
+      return {
+        ...nodo,
+        children: hijosFiltrados,
+        _expandirPorFiltro: Boolean(query || troncal || crit) && hijosFiltrados.length > 0
+      };
     }
+    return null;
+  }).filter(Boolean);
+}
 
     function crearElementoNodo(nodo, isRoot, autoExpandir) {
       const div = document.createElement("div");
@@ -330,17 +345,15 @@
 
       div.appendChild(row);
 
-      if (tieneHijos) {
-        const childrenContainer = document.createElement("div");
-        childrenContainer.className = autoExpandir ? "children open" : "children";
-        nodo.children.forEach(hijo => {
-          childrenContainer.appendChild(crearElementoNodo(hijo, false, autoExpandir));
-        });
-        div.appendChild(childrenContainer);
-      }
-
-      return div;
-    }
+if (tieneHijos) {
+  const abrirHijos = autoExpandir && (nodo._expandirPorFiltro !== false);
+  const childrenContainer = document.createElement("div");
+  childrenContainer.className = abrirHijos ? "children open" : "children";
+  nodo.children.forEach(hijo => {
+    childrenContainer.appendChild(crearElementoNodo(hijo, false, autoExpandir));
+  });
+  div.appendChild(childrenContainer);
+}
 
     function mostrarDetalle(nodo) {
       const panel = document.getElementById("detail-container");
