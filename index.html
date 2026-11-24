@@ -507,6 +507,15 @@
     const STORAGE_KEY = "sap_tree_cache_v1";
     const FIELD_MODE_KEY = "sap_tree_field_mode_v1";
 
+    const ESTACIONES_MAPA = {
+      "P0090": "P0090 - Estación Chimitá",
+      "P0230": "P0230 - Estación Galán",
+      "P0310": "P0310 - Estación Lizama",
+      "P0520": "P0520 - Estación Santa Rosa",
+      "P0540": "P0540 - Estación Sebastopol",
+      "P0630": "P0630 - Estación Vasconia"
+    };
+
     let rawUT = [];
     let rawEQ = [];
     let treeData = [];
@@ -602,48 +611,34 @@
     function inicializarVista() {
       treeData = construirArbol(rawUT, rawEQ);
       treeData.forEach(root => detectarEstacionNodo(root, ""));
-      poblarFiltros(treeData);
+      poblarFiltros();
       renderizarArbol();
     }
 
     function detectarEstacionNodo(nodo, ancestroEstacion = "") {
-      const texto = `${nodo.id} ${nodo.nombre}`.toLowerCase();
-      if (nodo.tipo === "UT" && (texto.includes("estación") || texto.includes("estacion") || texto.includes("planta"))) {
-        nodo._estacion = `${nodo.id} — ${nodo.nombre}`;
-      } else {
-        nodo._estacion = ancestroEstacion || (nodo.tipo === "UT" ? `${nodo.id} — ${nodo.nombre}` : "");
-      }
+      const emp = (nodo.raw && nodo.raw["Emplazamiento"]) ? nodo.raw["Emplazamiento"].trim() : "";
+      const estacionActual = ESTACIONES_MAPA[emp] || ancestroEstacion || "";
+
+      nodo._estacion = estacionActual;
 
       if (nodo.children && nodo.children.length > 0) {
-        nodo.children.forEach(hijo => detectarEstacionNodo(hijo, nodo._estacion));
+        nodo.children.forEach(hijo => detectarEstacionNodo(hijo, estacionActual));
       }
     }
 
-    function recolectarEstaciones(nodos, setEstaciones) {
-      nodos.forEach(n => {
-        if (n._estacion) setEstaciones.add(n._estacion);
-        if (n.children && n.children.length > 0) {
-          recolectarEstaciones(n.children, setEstaciones);
-        }
-      });
-    }
-
-    function poblarFiltros(arbolYaConstruido) {
+    function poblarFiltros() {
       const troncales = new Set();
       const criticidades = new Set();
-      const estaciones = new Set();
 
       [...rawUT, ...rawEQ].forEach(item => {
         if (item["Troncal"]) troncales.add(item["Troncal"]);
         if (item["Criticidad"]) criticidades.add(item["Criticidad"]);
       });
 
-      recolectarEstaciones(arbolYaConstruido, estaciones);
-
       const selEstacion = document.getElementById("filterEstacion");
       selEstacion.innerHTML = '<option value="">Todas las Estaciones</option>';
-      [...estaciones].sort().forEach(est => {
-        selEstacion.innerHTML += `<option value="${est}">${est}</option>`;
+      Object.values(ESTACIONES_MAPA).forEach(label => {
+        selEstacion.innerHTML += `<option value="${label}">${label}</option>`;
       });
 
       const selTroncal = document.getElementById("filterTroncal");
